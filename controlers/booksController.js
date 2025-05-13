@@ -8,51 +8,64 @@ const fetchBooks = async (req, res) => {
     return res.status(400).json({ error: "Query parameter is required" });
   }
 
-  const searchUrl = `https://api.multisearch.io/?id=11908&lang=uk&m=1733494637235&q=j62y3a&query=${encodeURIComponent(
+  const searchUrl = `https://book-ye.com.ua/autocomplete/autocomplete/index/?q=${encodeURIComponent(
     query
-  )}&s=mini&uid=a453fa16-f538-4e66-9074-4faa88847dc8`;
-
+  )}`;
   try {
     const { data } = await axios.get(searchUrl);
 
-    if (!data.results || !data.results.item_groups) {
+    if (!data.products || !Array.isArray(data.products)) {
       return res.status(404).json({ error: "No books found" });
     }
 
     const booksMap = new Map();
 
-    for (const group of data.results.item_groups) {
-      for (const item of group.items) {
-        if (!item.name) continue; // ❗️Пропустити, якщо нема назви
-    
-        booksMap.set(item.id, {
-          id_book: item.id,
-          oldprice: item.oldprice || null,
-          name: item.name,
-          picture: item.picture,
-          brand: item.brand,
-          price: item.price,
-          is_presence: item.is_presence,
-          author: null,
-        });
+    for (const item of data.products) {
+      if (!item.name) continue; // ❗️Пропустити, якщо нема назви
+
+      let price = null;
+
+      // Спробуємо знайти ціну всередині <span class="price">
+      const priceMatchInSpan = item.price.match(/<span class="price">(\d+) грн<\/span>/);
+      if (priceMatchInSpan && priceMatchInSpan[1]) {
+        price = parseInt(priceMatchInSpan[1]);
+      } else {
+        // Якщо не знайдено, спробуємо знайти в атрибуті data-price-amount
+        const priceMatchInAttribute = item.price.match(/data-price-amount="(\d+)"/);
+        if (priceMatchInAttribute && priceMatchInAttribute[1]) {
+          price = parseInt(priceMatchInAttribute[1]);
+        } else {
+          price = 0; // Якщо ціну не знайдено ніде, встановлюємо 0 (або інше значення за замовчуванням)
+        }
       }
+     
+      booksMap.set(item.id, {
+        id_book: item.id,
+        oldprice: null, // У новій структурі oldprice відсутній
+        name: item.name,
+        picture: item.image,
+        brand: item.brand || '', // У новій структурі brand відсутній
+        price: price,
+        is_presence: true, // Припускаємо, що товари в автокомліті є в наявності
+        author: item.author || null, // Автор може бути порожнім рядком
+      });
     }
 
     const uniqueBooks = Array.from(booksMap.values());
 
-    // 🔹 Отримання авторів через Google Books API
+    // 🔹 Отримання авторів через Google Books API (залишається без змін)
     for (const book of uniqueBooks) {
       if (!book.name) continue; // Пропускаємо книги без назви
-    
+
       const googleBooksUrl = `https://www.googleapis.com/books/v1/volumes?q=intitle:${encodeURIComponent(book.name)}&maxResults=1`;
-    
+
       try {
         const googleResponse = await axios.get(googleBooksUrl);
         const googleData = googleResponse.data;
-    
+
         if (googleData.items && googleData.items.length > 0) {
           const volumeInfo = googleData.items[0].volumeInfo;
-    
+
           book.author =
             volumeInfo.authors && volumeInfo.authors.length > 0
               ? volumeInfo.authors.join(", ")
@@ -73,13 +86,13 @@ const fetchBooks = async (req, res) => {
       const result = await db.query(
         `INSERT INTO books (id_book, oldprice, name, picture, brand, price, is_presence, author, num_add)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         ON CONFLICT (id_book) 
-         DO UPDATE SET 
-            oldprice = EXCLUDED.oldprice, 
-            name = EXCLUDED.name, 
+         ON CONFLICT (id_book)
+         DO UPDATE SET
+            oldprice = EXCLUDED.oldprice,
+            name = EXCLUDED.name,
             picture = EXCLUDED.picture,
-            brand = EXCLUDED.brand, 
-            price = EXCLUDED.price, 
+            brand = EXCLUDED.brand,
+            price = EXCLUDED.price,
             is_presence = EXCLUDED.is_presence,
             author = EXCLUDED.author
          RETURNING id`,
@@ -109,7 +122,6 @@ const fetchBooks = async (req, res) => {
     return res.status(500).json({ error: "Failed to fetch or save books" });
   }
 };
-
 const addBook = async (req, res)=>{
  const {name, author, price, picture, oldprice, brand, id_book, is_presence, num_page } = req.body;
  try {
@@ -313,4 +325,5 @@ module.exports = {
   addBook,
   getUserCalendar
 };
+
 
